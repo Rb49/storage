@@ -1,4 +1,10 @@
 import discord
+from discord.ext import commands
+from discord.ext.commands import Bot
+import asyncio
+
+
+from file import send_segments
 
 
 class MyClient(discord.Client):
@@ -11,10 +17,18 @@ class MyClient(discord.Client):
             return
 
         if message.content == 'ping':
+            # Example byte array (binary data)
+            path = r"C:\Users\roeyb\Downloads\balenaEtcher-portable.exe"
+            path = r"C:\Users\roeyb\Downloads\25MB_file.bin"
+            await send_segments(message, path)
+
             await message.channel.send('pong')
 
 
 if __name__ == '__main__':
+    import tracemalloc
+    tracemalloc.start()
+
     intents = discord.Intents.default()
     intents.message_content = True
     client = MyClient(intents=intents)
