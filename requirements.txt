@@ -1,1 +1,2 @@
 discord.py==2.5.0a5060+gff638d39
+pycryptodome~=3.20.0
