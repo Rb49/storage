@@ -31,6 +31,8 @@ class MyClient(commands.Bot):
         await webhook.execute()
 
     async def validate(self):
+        print('called validate')
+
         # remove files without a channel
         guild = self.CONTEXT.guild
         for checksum in self.db_helper.get_all_checksums():
@@ -45,14 +47,14 @@ class MyClient(commands.Bot):
                     await channel.delete()
 
     async def on_message(self, message: discord.Message):
-        async def handler():
+        async def handler() -> bool:
             nonlocal message
             if message.content == "!Hello_there":
                 self.db_helper = UploadedFilesDB()
                 # get context
                 self.CONTEXT = await self.get_context(message)
-                # await self.validate()
-                return
+                await self.validate()
+                return True
 
             # check commands
             if message.content == "!Upload" and self.CURRENT_UPLOAD_PATH != "":
@@ -60,19 +62,19 @@ class MyClient(commands.Bot):
                 if self.db_helper.find_name(Path(self.CURRENT_UPLOAD_PATH).name):
                     self.CURRENT_UPLOAD_PATH = ""
                     self.update_queue.put({"file name": Path(self.CURRENT_UPLOAD_PATH).name, "action": ("upload", "failed", "File was already uploaded")})
-                    return
+                    return False
                 path = self.CURRENT_UPLOAD_PATH
                 self.CURRENT_UPLOAD_PATH = ""
 
                 # was the file uploaded successfully?
                 if (not isinstance(file_data := await send_segments(self.CONTEXT, path, self.update_queue), tuple)) or (not file_data[1]):
                     self.update_queue.put({"file name": Path(path).name, "action": ("upload", "failed", "Upload error")})
-                    return
+                    return False
 
                 file: File = file_data[0]
                 self.db_helper.insert_file(file)
                 self.update_queue.put({"file name": file.name, "action": ("upload", "success")})
-                return
+                return True
 
             if message.content == "!Download" and self.CURRENT_NAME_TO_DOWNLOAD != "":
                 name = self.CURRENT_NAME_TO_DOWNLOAD
@@ -81,7 +83,7 @@ class MyClient(commands.Bot):
                     self.update_queue.put({"file name": name, "action": ("download", "failed", "File was not found")})
                     self.CURRENT_NAME_TO_DOWNLOAD = ""
                     self.CURRENT_SAVE_DIR = ""
-                    return
+                    return False
                 self.CURRENT_NAME_TO_DOWNLOAD = ""
                 path = self.CURRENT_SAVE_DIR
                 self.CURRENT_SAVE_DIR = ""
@@ -89,17 +91,20 @@ class MyClient(commands.Bot):
                 # download was not successful
                 if not await download(self.CONTEXT, path, file, self.update_queue):
                     self.update_queue.put({"file name": name, "action": ("download", "failed", "Download error. Consider deleting the file")})
-                    return
+                    return False
 
                 self.update_queue.put({"file name": name, "action": ("download", "success")})
-                return
+                return True
 
             if message.content == "!Validate":
                 await self.validate()
-                pass
+                return True
 
-        await handler()
-        await self.validate()
+            # else
+            return True
+
+        if not await handler():
+            await self.validate()
 
 
 def run_tkinter_app(Client):

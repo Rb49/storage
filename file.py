@@ -12,7 +12,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
-MAX_SIZE = 10 * 1024 * 1024  # discord's max file upload size
+MAX_SIZE = 8 * 1024 * 1024  # discord's max file upload size
 
 
 @dataclass(slots=True)
@@ -97,6 +97,7 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
         bin_data = pad(bin_data, AES.block_size)
         bin_data = cipher.encrypt(bin_data)
         file_like_object = io.BytesIO(bin_data)
+        print(file_like_object.getbuffer().nbytes)
 
         file = discord.File(file_like_object, filename=name)
         checks.append(False)
