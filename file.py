@@ -84,7 +84,7 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
         name = hashlib.new('sha256')
         name.update(bin_data)
         piece_checksum = name.copy()
-        name.update(os.urandom(32))
+        name.update(get_random_bytes(32))
         name = name.hexdigest()
 
         if len(bin_data) < MAX_SIZE:

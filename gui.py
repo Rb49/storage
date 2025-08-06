@@ -112,10 +112,11 @@ class MainWindow(customtkinter.CTk):
         self.db_helper.delete_file_with_name(self.choice)
 
         self.delete_selection()
-
+        # TODO dont use validate. it will ruin uploads/downloads
         threading.Thread(target=self.delete_file, daemon=True).start()
 
     def delete_file(self):
+        # TODO dont use validate. it will ruin uploads/downloads56y56y
         webhook = DiscordWebhook(url=self.CLIENT_REF.HOOK_URL, content="!Validate", rate_limit_retry=True)
         webhook.execute()
 
