@@ -1,5 +1,6 @@
 import hashlib
 import io
+import secrets
 from pathlib import Path
 from typing import Generator, Union
 import os
@@ -8,8 +9,8 @@ import discord
 import asyncio
 from dataclasses import dataclass
 
+import numpy as np
 from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
 MAX_SIZE = 8 * 1024 * 1024  # discord's max file upload size
@@ -19,6 +20,7 @@ MAX_SIZE = 8 * 1024 * 1024  # discord's max file upload size
 class Segment:
     name: str
     checksum: str
+    index: int
     iv: bytes
     key: bytes
 
@@ -32,16 +34,17 @@ class File:
 
     def __repr__(self) -> str:
         return (f"name: \n{self.name}" +
-                "\nsegments:\n" + "\n".join(seg.name for seg in self.segments) +
+                "\nsegments:\n" + "\n".join(seg.name for seg in sorted(self.segments, key=lambda x: x.index)) +
                 f"\nchecksum: \n{self.checksum}" +
                 f"\nsize:  \n{self.size}")
 
 
-def get_slice(path: str) -> Generator[bytes, None, None]:
+def get_slice(path: str, in_order: bool) -> Generator[Union[tuple[int, bytes], int], None, None]:
     """
     given a path return the next MAX_SIZE limit segment
+    :param in_order: True: get slices in order, False: shuffled
     :param path: abs path of file
-    :return: binary data
+    :return: first return the fd size, then index, binary data pairs
     """
     try:
         if "nt" == os.name:
@@ -51,12 +54,21 @@ def get_slice(path: str) -> Generator[bytes, None, None]:
     except (OSError, PermissionError):
         return
 
+    # shuffle indexes
+    fd_size = os.fstat(fd).st_size
+    segments_needed = fd_size // MAX_SIZE + int(bool(fd_size % MAX_SIZE))
+    indexes = list(range(segments_needed))
+    if not in_order:
+        secrets.SystemRandom().shuffle(indexes)
+
+    yield fd_size
+
     try:
-        while True:
+        for index in indexes:
+            if not in_order:
+                os.lseek(fd, MAX_SIZE * index, os.SEEK_SET)
             data = os.read(fd, MAX_SIZE)
-            if not data:
-                break
-            yield data
+            yield index, data
     finally:
         os.close(fd)
 
@@ -72,13 +84,15 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
         return 0
 
     segments_names = []
-
     tasks = []
-    checks = []
-    size = 0
 
-    for index, bin_data in enumerate(get_slice(path)):
-        size += len(bin_data)
+    generator = get_slice(path, False)
+    fd_size = next(generator)
+    checks = [False] * (fd_size // MAX_SIZE + int(bool(fd_size % MAX_SIZE)))
+
+    for counter, return_data in enumerate(generator):
+        index, bin_data = return_data
+        print(index)
 
         # create filename
         name = hashlib.new('sha256')
@@ -87,36 +101,36 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
         name.update(get_random_bytes(32))
         name = name.hexdigest()
 
-        if len(bin_data) < MAX_SIZE:
-            bin_data += b"1" + b"0" * (MAX_SIZE - len(bin_data) - 1)
+        if len(bin_data) < MAX_SIZE:  # custom padding, as MAX_SIZE is a multiply of AES block size
+            filler = np.random.randint(0, 256, MAX_SIZE - len(bin_data), dtype=np.uint8).tobytes()
+            bin_data += filler
+            print('filler ', len(bin_data) == MAX_SIZE)
 
         # encrypt slice
         key, iv = get_random_bytes(32), get_random_bytes(16)
         cipher = AES.new(key, AES.MODE_CBC, iv)
 
-        bin_data = pad(bin_data, AES.block_size)
         bin_data = cipher.encrypt(bin_data)
         file_like_object = io.BytesIO(bin_data)
-        print(file_like_object.getbuffer().nbytes)
 
         file = discord.File(file_like_object, filename=name)
-        checks.append(False)
         tasks.append(asyncio.create_task(
             send(discord.utils.get(ctx.guild.channels, name=checksum), Path(path).name, name, file, checks, index,
                  queue)))
 
-        if index % 3 == 0:
+        if counter % 3 == 0:
             await asyncio.gather(*tasks)
             tasks = []
 
-        segments_names.append(Segment(name, piece_checksum.hexdigest(), iv, key))
+        segments_names.append(Segment(name, piece_checksum.hexdigest(), index, iv, key))
         del name, iv, key
         gc.collect()
 
     await asyncio.gather(*tasks)
     del tasks
-    file_obj = File(Path(path).name, segments_names, checksum, size)
-    return file_obj, all(checks) and len(checks) == len(file_obj.segments) and size
+    file_obj = File(Path(path).name, segments_names, checksum, fd_size)
+    print('done')
+    return file_obj, all(checks) and len(checks) == len(file_obj.segments) and fd_size
 
 
 async def send(channel: discord.TextChannel, file_name: str, obs_name: str, file: discord.File,
@@ -154,27 +168,29 @@ async def download(ctx, save_path: str, file: File, queue) -> bool:
         async for message in channel.history(limit=len(file.segments)):
             attachment = message.attachments[0]
             bin_data = await attachment.read()
-            index = segment_names.index(attachment.filename)
-            print(index)
+
+            # get real index of the slice
+            segment_name_index = segment_names.index(attachment.filename)
+            segment = file.segments[segment_name_index]
+            real_index = segment.index
+            print(real_index)
 
             # dencrypt slice
-            key, iv = file.segments[index].key, file.segments[index].iv
+            key, iv = segment.key, segment.iv
             cipher = AES.new(key, AES.MODE_CBC, iv)
-
             bin_data = cipher.decrypt(bin_data)
-            bin_data: bytes = unpad(bin_data, AES.block_size)
 
-            if index == len(segment_names) - 1:
-                last_data_index = len(bin_data.rstrip(b"0"))
-                bin_data = bin_data[:last_data_index - 1]
+            if real_index == len(file.segments) - 1:  # remove custom padding from the last piece
+                last_data_index = file.size % MAX_SIZE
+                bin_data = bin_data[:last_data_index]
 
             # validate the piece
             Hash = hashlib.new('sha256')
             Hash.update(bin_data)
-            if file.segments[index].checksum != Hash.hexdigest():
+            if segment.checksum != Hash.hexdigest():
                 raise Exception
 
-            os.lseek(fd, MAX_SIZE * index, os.SEEK_SET)
+            os.lseek(fd, MAX_SIZE * real_index, os.SEEK_SET)
             os.write(fd, bin_data)
             del key, iv
             queue.put({"file name": file.name, "action": ("download", "segment")})
@@ -197,8 +213,10 @@ async def download(ctx, save_path: str, file: File, queue) -> bool:
 
 def get_checksum(path: str) -> str:
     checksum = hashlib.new('sha256')
-
-    for bin_data in get_slice(path):
+    # discard the first return of the generator
+    generator = get_slice(path, True)
+    next(generator)
+    for _, bin_data in generator:
         checksum.update(bin_data)
     return checksum.hexdigest()
 
