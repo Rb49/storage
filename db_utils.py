@@ -26,6 +26,8 @@ class UploadedFilesDB(Singleton):
     sqlite database api for accessing or inserting into the database of completed torrents (PickleableFile) for seeding.
     """
     def __init__(self):
+        if hasattr(self, "conn"):
+            return
         conn = sqlite3.connect('uploaded_files.db')
         # checksum, file name, File object
         conn.cursor().execute('CREATE TABLE IF NOT EXISTS uploaded_files (checksum TEXT PRIMARY KEY, name TEXT, file_object BLOB)')

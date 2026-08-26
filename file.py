@@ -73,7 +73,7 @@ def get_slice(path: str, in_order: bool) -> Generator[Union[tuple[int, bytes], i
         os.close(fd)
 
 
-async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
+async def upload(ctx, path: str, update_queue) -> Union[tuple[File, bool], int]:
     """
     splits the file into segments, encrypts it and sends it to the message's channel
     """
@@ -114,9 +114,7 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
         file_like_object = io.BytesIO(bin_data)
 
         file = discord.File(file_like_object, filename=name)
-        tasks.append(asyncio.create_task(
-            send(discord.utils.get(ctx.guild.channels, name=checksum), Path(path).name, name, file, checks, index,
-                 queue)))
+        tasks.append(asyncio.create_task(send(discord.utils.get(ctx.guild.channels, name=checksum), Path(path).name, name, file, checks, index)))
 
         if counter % 3 == 0:
             await asyncio.gather(*tasks)
@@ -134,24 +132,23 @@ async def send_segments(ctx, path: str, queue) -> Union[tuple[File, bool], int]:
 
 
 async def send(channel: discord.TextChannel, file_name: str, obs_name: str, file: discord.File,
-               checks: list[bool], index: int, queue, retry: int = 1):
+               checks: list[bool], index: int, retry: int = 1):
     try:
         await channel.send(content=obs_name, file=file)
         checks[index] = True
-        queue.put({"file name": file_name, "action": ("upload", "segment")})
     except Exception as e:
         if retry == 3:
             print(f"Upload failed due to {e}")
             # TODO terminate upload
             ...
         else:
-            await send(channel, file_name, obs_name, file, checks, index, queue, retry + 1)
+            await send(channel, file_name, obs_name, file, checks, index, retry + 1)
     finally:
         del file
         gc.collect()
 
 
-async def download(ctx, save_path: str, file: File, queue) -> bool:
+async def download(ctx, save_path: str, file: File, update_queue) -> bool:
     new_path = os.path.join(save_path, file.name)
     try:
         if "nt" == os.name:
@@ -193,12 +190,10 @@ async def download(ctx, save_path: str, file: File, queue) -> bool:
             os.lseek(fd, MAX_SIZE * real_index, os.SEEK_SET)
             os.write(fd, bin_data)
             del key, iv
-            queue.put({"file name": file.name, "action": ("download", "segment")})
 
         # validate the entire file
         if file.checksum != get_checksum(new_path):
             raise Exception
-
 
     except Exception as e:
         print(f"Download failed: {e}")

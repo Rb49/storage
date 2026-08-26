@@ -8,7 +8,7 @@ import discord
 from discord.ext import commands
 from discord_webhook import AsyncDiscordWebhook
 
-from file import send_segments, File, download
+from file import upload, File, download
 from db_utils import UploadedFilesDB
 from gui import MainWindow
 
@@ -67,7 +67,7 @@ class MyClient(commands.Bot):
                 self.CURRENT_UPLOAD_PATH = ""
 
                 # was the file uploaded successfully?
-                if (not isinstance(file_data := await send_segments(self.CONTEXT, path, self.update_queue), tuple)) or (not file_data[1]):
+                if (not isinstance(file_data := await upload(self.CONTEXT, path, self.update_queue), tuple)) or (not file_data[1]):
                     self.update_queue.put({"file name": Path(path).name, "action": ("upload", "failed", "Upload error")})
                     return False
 
